@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buscador de Desorden Cyberpunk</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --panel: #12121f;
+            --text: #e2e2e9;
+            --accent: #00e6ff;
+            --success: #00ff66;
+            --danger: #ff0055;
+        }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            background: var(--panel);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0, 230, 255, 0.1);
+            max-width: 640px;
+            width: 100%;
+            text-align: center;
+        }
+        .viewer-box {
+            position: relative;
+            width: 100%;
+            background: #000;
+            margin-top: 15px;
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        input, button {
+            padding: 10px 15px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            font-size: 14px;
+        }
+        input {
+            background: #1a1a2e;
+            color: #fff;
+            flex-grow: 1;
+            min-width: 200px;
+        }
+        button {
+            background: #1a1a2e;
+            color: var(--accent);
+            border-color: var(--accent);
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background: var(--accent);
+            color: #000;
+            box-shadow: 0 0 10px var(--accent);
+        }
+        button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            border-color: #333;
+            color: #666;
+        }
+        #statusIndicator {
+            margin-top: 10px;
+            font-weight: bold;
+            color: var(--accent);
+            border-bottom: 2px solid #333;
+            padding-bottom: 5px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Buscador de Desorden Visual</h2>
+    
+    <div class="controls">
+        <input type="text" id="targetObject" placeholder="¿Qué buscas? (ej: mouse, vaso, llaves)">
+        <button id="startCamBtn">Encender Cámara</button>
+    </div>
+
+    <div class="controls">
+        <button id="scanBtn" disabled>Buscar Una Vez</button>
+        <button id="loopScanBtn" disabled>Iniciar Escaneo Continuo</button>
+    </div>
+
+    <div id="statusIndicator">Cámara Apagada</div>
+
+    <div class="viewer-box">
+        <video id="videoView" autoplay playsinline muted></video>
+        <canvas id="overlayCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const video = document.getElementById('videoView');
+    const canvas = document.getElementById('overlayCanvas');
+    const ctx = canvas.getContext('2d');
+    const startCamBtn = document.getElementById('startCamBtn');
+    const scanBtn = document.getElementById('scanBtn');
+    const loopScanBtn = document.getElementById('loopScanBtn');
+    const targetObjectInput = document.getElementById('targetObject');
+    const statusIndicator = document.getElementById('statusIndicator');
+
+    // ==========================================
+    // NOTA DE PRODUCCIÓN: 
+    // De momento dejamos la IP de tu red local. 
+    // Cuando subas tu Backend a Render, cambiarás esta URL por la que te dé Render.
+    // ==========================================
+    const BACKEND_URL = 'http://192.168.100.9:8000/buscar-objeto';
+    
+    let escaneoIntervalo = null;
+    let isProcessing = false; 
+
+    // Activar la cámara
+    startCamBtn.addEventListener('click', async () => {
+        try {
+            statusIndicator.innerText = 'Iniciando cámara...';
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { 
+                    facingMode: 'environment',
+                    width: { ideal: 640 }, 
+                    height: { ideal: 480 }
+                },
+                audio: false
+            });
+            video.srcObject = stream;
+            
+            video.onloadedmetadata = () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                statusIndicator.innerText = 'Cámara Activa';
+                scanBtn.disabled = false;
+                loopScanBtn.disabled = false; 
+                startCamBtn.innerText = 'Cámara Ready';
+                startCamBtn.disabled = true;
+            };
+        } catch (err) {
+            console.error(err);
+            statusIndicator.innerText = 'Error de Cámara';
+            alert('Por favor, permite el acceso a la cámara.');
+        }
+    });
+
+    // Capturar y enviar imagen
+    async function procesarFotograma() {
+        if (isProcessing) return; 
+        
+        const objetoBuscado = targetObjectInput.value.trim();
+        if (!objetoBuscado) {
+            statusIndicator.innerText = 'Escribe qué buscar';
+            return;
+        }
+
+        isProcessing = true;
+
+        // Redimensionar la foto temporalmente para que viaje súper rápido por internet
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = 480; 
+        offscreenCanvas.height = 360;
+        const offscreenCtx = offscreenCanvas.getContext('2d');
+        offscreenCtx.drawImage(video, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+
+        offscreenCanvas.toBlob(async (blob) => {
+            const formData = new FormData();
+            formData.append('foto', blob, 'captura.jpg');
+            formData.append('objeto_buscado', objetoBuscado);
+
+            try {
+                const response = await fetch(BACKEND_URL, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error('Error en el servidor');
+                
+                const resJson = await response.json();
+                const data = typeof resJson === 'string' ? JSON.parse(resJson) : resJson;
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height); 
+
+                if (data.encontrado && data.box_2d) {
+                    statusIndicator.innerText = `Detectado: ${objetoBuscado.toUpperCase()}`;
+                    dibujarRecuadro(data.box_2d, data.etiqueta);
+                } else {
+                    statusIndicator.innerText = 'Buscando objeto...';
+                }
+
+            } catch (error) {
+                console.error(error);
+            } finally {
+                isProcessing = false; 
+            }
+        }, 'image/jpeg', 0.40); // Calidad al 40% (Compresión alta = velocidad fluida)
+    }
+
+    // Botón Manual
+    scanBtn.addEventListener('click', () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        statusIndicator.innerText = 'Analizando...';
+        procesarFotograma();
+    });
+
+    // Botón Continuo (Ráfaga)
+    loopScanBtn.addEventListener('click', () => {
+        if (escaneoIntervalo) {
+            clearInterval(escaneoIntervalo);
+            escaneoIntervalo = null;
+            loopScanBtn.innerText = 'Iniciar Escaneo Continuo';
+            loopScanBtn.style.background = '';
+            statusIndicator.innerText = 'Escaneo detenido';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        } else {
+            statusIndicator.innerText = 'Escaneo continuo activo...';
+            loopScanBtn.innerText = 'Detener Escaneo';
+            loopScanBtn.style.background = '#ff0055';
+            
+            procesarFotograma();
+            escaneoIntervalo = setInterval(procesarFotograma, 1000); // 1 segundo de intervalo
+        }
+    });
+
+    // Dibujar el recuadro neón
+    function dibujarRecuadro(box, etiqueta) {
+        const [ymin, xmin, ymax, xmax] = box;
+        
+        const x = (xmin / 1000) * canvas.width;
+        const y = (ymin / 1000) * canvas.height;
+        const width = ((xmax - xmin) / 1000) * canvas.width;
+        const height = ((ymax - ymin) / 1000) * canvas.height;
+
+        ctx.strokeStyle = '#00e6ff';
+        ctx.lineWidth = 4;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#00e6ff';
+        ctx.strokeRect(x, y, width, height);
+
+        ctx.shadowBlur = 0; 
+        ctx.fillStyle = '#00e6ff';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText(etiqueta.toUpperCase(), x, y - 10);
+    }
+});
+</script>
+</body>
+</html>

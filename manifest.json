@@ -1,0 +1,16 @@
+{
+  "name": "Buscador de Desorden",
+  "short_name": "BuscadorIA",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#00e6ff",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1368/1368484.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
